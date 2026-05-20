@@ -8,7 +8,7 @@ Two reusable workflows live here:
 
 | Workflow | Trigger in caller | Purpose |
 |---|---|---|
-| [`plugin-tests.yml`](.github/workflows/plugin-tests.yml) | `push` to `main` + `pull_request` | Matrix Pest tests (Laravel 11/12/13 × Filament 4/5 for Filament plugins; Laravel 11/12/13 for pure-Laravel plugins) + `pint --test` |
+| [`plugin-tests.yml`](.github/workflows/plugin-tests.yml) | `push` to `main` + `pull_request` | Matrix Pest tests (Laravel 12/13 × Filament 4/5 for Filament plugins; Laravel 12/13 for pure-Laravel plugins) + `pint --test`. Laravel 11 was dropped from the default matrix on 2026-05-20 — no Codenzia app or plugin still runs on it. |
 | [`plugin-release.yml`](.github/workflows/plugin-release.yml) | `push` of a `v*` tag | Force-pushes the tagged commit + tag from the `-dev` repo to the public mirror, then creates a GitHub Release on the public repo. Packagist auto-detects via its webhook. |
 
 ## Caller examples

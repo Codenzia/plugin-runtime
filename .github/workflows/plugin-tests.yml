@@ -40,7 +40,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { php: '8.3', laravel: '11.*', testbench: '9.*',  filament: '4.*' }
           - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '4.*' }
           - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '5.*' }
           - { php: '8.3', laravel: '13.*', testbench: '11.*', filament: '5.*' }
@@ -87,7 +86,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { php: '8.3', laravel: '11.*', testbench: '9.*' }
           - { php: '8.3', laravel: '12.*', testbench: '10.*' }
           - { php: '8.3', laravel: '13.*', testbench: '11.*' }
     name: L${{ matrix.laravel }} PHP${{ matrix.php }}
