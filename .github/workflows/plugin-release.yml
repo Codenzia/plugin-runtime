@@ -1,0 +1,138 @@
+name: Plugin Release (reusable)
+
+# Reusable release workflow. Triggered when a `v*` tag is pushed to the
+# caller's repo (typically a `-dev` private repo). Mirrors the tagged
+# commit + tag to the public repo, then creates a GitHub Release there.
+# Packagist auto-detects the new tag via its webhook on the public repo
+# — no Packagist-specific step is needed once the package is submitted.
+#
+# Example caller in <plugin>-dev/.github/workflows/release.yml:
+#
+#   on:
+#     push:
+#       tags: ['v*']
+#   jobs:
+#     release:
+#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-release.yml@main
+#       with:
+#         public_repo: Codenzia/filament-panel-base   # omit for public-only repos
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      public_repo:
+        description: |
+          Public mirror repo in <org/name> format, e.g. "Codenzia/filament-panel-base".
+          When set, the workflow force-pushes HEAD + the triggering tag to that repo
+          (uses CODENZIA_PAT). When empty, the workflow assumes the caller IS the
+          public repo and only creates the GitHub Release.
+        required: false
+        type: string
+        default: ""
+      target_branch:
+        description: "Branch to push HEAD to on the public mirror"
+        required: false
+        type: string
+        default: "main"
+      create_github_release:
+        description: "Create a GitHub Release on the resulting (public) repo from the tag"
+        required: false
+        type: boolean
+        default: true
+      changelog_path:
+        description: "Path to CHANGELOG.md. Used to extract release notes for the matching tag."
+        required: false
+        type: string
+        default: "CHANGELOG.md"
+    secrets:
+      CODENZIA_PAT:
+        required: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout (with full history + tags)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag shape
+        run: |
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "Refusing to release: tag '${GITHUB_REF_NAME}' is not semver-shaped (vMAJOR.MINOR.PATCH[-PRERELEASE])" >&2
+            exit 1
+          fi
+          echo "tag: ${GITHUB_REF_NAME}"
+
+      - name: Push commit + tag to public mirror
+        if: ${{ inputs.public_repo != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.CODENZIA_PAT }}
+          PUBLIC_REPO: ${{ inputs.public_repo }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "CODENZIA_PAT secret not set; cannot push to $PUBLIC_REPO" >&2
+            exit 1
+          fi
+          git config user.email "actions@github.com"
+          git config user.name  "github-actions[bot]"
+          git remote add public "https://x-access-token:${GH_TOKEN}@github.com/${PUBLIC_REPO}.git"
+          echo "Pushing HEAD to ${PUBLIC_REPO}:${TARGET_BRANCH}"
+          git push public "HEAD:refs/heads/${TARGET_BRANCH}" --force-with-lease
+          echo "Pushing tag ${GITHUB_REF_NAME} to ${PUBLIC_REPO}"
+          git push public "${GITHUB_REF_NAME}"
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        env:
+          CHANGELOG_PATH: ${{ inputs.changelog_path }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          NOTES=""
+          if [ -f "$CHANGELOG_PATH" ]; then
+            NOTES="$(awk -v v="$VERSION" '
+              BEGIN { capture = 0 }
+              /^## \[/ {
+                if (capture) exit
+                if (index($0, "[" v "]") || index($0, "[Unreleased]")) { capture = 1; next }
+              }
+              capture { print }
+            ' "$CHANGELOG_PATH" | sed '/./,$!d' | sed -e :a -e '/^$/{$d;N;ba' -e '}')"
+          fi
+          if [ -z "$NOTES" ]; then
+            NOTES="Release ${TAG}"
+          fi
+          {
+            echo "notes<<EOF_NOTES"
+            echo "$NOTES"
+            echo "EOF_NOTES"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: ${{ inputs.create_github_release }}
+        env:
+          GH_TOKEN: ${{ secrets.CODENZIA_PAT || secrets.GITHUB_TOKEN }}
+          PUBLIC_REPO: ${{ inputs.public_repo }}
+          RELEASE_NOTES: ${{ steps.notes.outputs.notes }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          REPO_FLAG=""
+          if [ -n "$PUBLIC_REPO" ]; then
+            REPO_FLAG="--repo $PUBLIC_REPO"
+          fi
+          # `gh release create` errors if the release already exists, so try
+          # to edit-then-create; whichever succeeds wins.
+          if gh release view "$TAG" $REPO_FLAG >/dev/null 2>&1; then
+            gh release edit "$TAG" $REPO_FLAG --title "$TAG" --notes "$RELEASE_NOTES"
+          else
+            gh release create "$TAG" $REPO_FLAG --title "$TAG" --notes "$RELEASE_NOTES"
+          fi

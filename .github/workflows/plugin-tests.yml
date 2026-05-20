@@ -1,0 +1,142 @@
+name: Plugin Tests (reusable)
+
+# Reusable test workflow for Codenzia Filament / Laravel packages.
+# Callers in each plugin repo invoke this via `uses:` and pass a single
+# `pure_laravel` flag to switch between the Filament matrix and the
+# Laravel-only matrix.
+#
+# Example caller (see README.md for full snippets):
+#
+#   jobs:
+#     tests:
+#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@main
+#       with:
+#         pure_laravel: false   # default; set true for non-Filament packages
+
+on:
+  workflow_call:
+    inputs:
+      pure_laravel:
+        description: "true = Laravel-only matrix (no Filament dimension)"
+        required: false
+        type: boolean
+        default: false
+      pint:
+        description: "Run `pint --test` as a separate job"
+        required: false
+        type: boolean
+        default: true
+      php_extensions:
+        description: "PHP extensions installed on the runner"
+        required: false
+        type: string
+        default: "mbstring, dom, fileinfo, gd, zip, sqlite, pdo_sqlite, sodium"
+
+jobs:
+  tests-filament:
+    if: ${{ ! inputs.pure_laravel }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.3', laravel: '11.*', testbench: '9.*',  filament: '4.*' }
+          - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '4.*' }
+          - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '5.*' }
+          - { php: '8.3', laravel: '13.*', testbench: '11.*', filament: '5.*' }
+    name: L${{ matrix.laravel }} F${{ matrix.filament }} PHP${{ matrix.php }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: ${{ inputs.php_extensions }}
+          tools: composer:v2
+          coverage: none
+
+      - name: Resolve composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-${{ hashFiles('composer.json') }}
+          restore-keys: |
+            ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-
+
+      - name: Pin Laravel, Testbench, Filament versions
+        run: |
+          composer require \
+            "laravel/framework:${{ matrix.laravel }}" \
+            "orchestra/testbench:${{ matrix.testbench }}" \
+            "filament/filament:${{ matrix.filament }}" \
+            --no-interaction --no-update --dev
+
+      - name: Install Composer dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction
+
+      - name: Execute tests
+        run: vendor/bin/pest --compact
+
+  tests-laravel:
+    if: ${{ inputs.pure_laravel }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.3', laravel: '11.*', testbench: '9.*' }
+          - { php: '8.3', laravel: '12.*', testbench: '10.*' }
+          - { php: '8.3', laravel: '13.*', testbench: '11.*' }
+    name: L${{ matrix.laravel }} PHP${{ matrix.php }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: ${{ inputs.php_extensions }}
+          tools: composer:v2
+          coverage: none
+
+      - name: Resolve composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-${{ hashFiles('composer.json') }}
+          restore-keys: |
+            ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-
+
+      - name: Pin Laravel + Testbench versions
+        run: |
+          composer require \
+            "laravel/framework:${{ matrix.laravel }}" \
+            "orchestra/testbench:${{ matrix.testbench }}" \
+            --no-interaction --no-update --dev
+
+      - name: Install Composer dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction
+
+      - name: Execute tests
+        run: vendor/bin/pest --compact
+
+  pint:
+    if: ${{ inputs.pint }}
+    runs-on: ubuntu-24.04
+    name: Pint
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer:v2, pint
+          coverage: none
+
+      - name: Check code style
+        run: pint --test
