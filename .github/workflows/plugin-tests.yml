@@ -78,6 +78,15 @@ jobs:
             "orchestra/testbench:${{ matrix.testbench }}" \
             "filament/filament:${{ matrix.filament }}" \
             --no-interaction --no-update --dev
+      - name: Allow blocked filament/tables 5.x betas
+        # Composer's `audit.abandoned` + `block-insecure` machinery rejects
+        # filament/tables v5.0.0-beta* under advisory PKSA-5bdf-2x61-v43c.
+        # The advisory is informational for our purposes (no fixed version
+        # is available upstream yet — the v5 line is still in beta), so we
+        # explicitly opt out for CI runs only.
+        run: |
+          composer config audit.ignore.PKSA-5bdf-2x61-v43c "filament/tables v5 beta — no upstream fix yet, accepted for CI"
+
       - name: Install Composer dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction
       - name: Execute tests
@@ -120,6 +129,15 @@ jobs:
             "orchestra/testbench:${{ matrix.testbench }}" \
             "filament/filament:${{ matrix.filament }}" \
             --no-interaction --no-update --dev
+
+      - name: Allow blocked filament/tables 5.x betas
+        # Composer's `audit.abandoned` + `block-insecure` machinery rejects
+        # filament/tables v5.0.0-beta* under advisory PKSA-5bdf-2x61-v43c.
+        # The advisory is informational for our purposes (no fixed version
+        # is available upstream yet — the v5 line is still in beta), so we
+        # explicitly opt out for CI runs only.
+        run: |
+          composer config audit.ignore.PKSA-5bdf-2x61-v43c "filament/tables v5 beta — no upstream fix yet, accepted for CI"
 
       - name: Install Composer dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction
@@ -164,6 +182,15 @@ jobs:
             "laravel/framework:${{ matrix.laravel }}" \
             "orchestra/testbench:${{ matrix.testbench }}" \
             --no-interaction --no-update --dev
+
+      - name: Allow blocked filament/tables 5.x betas
+        # Composer's `audit.abandoned` + `block-insecure` machinery rejects
+        # filament/tables v5.0.0-beta* under advisory PKSA-5bdf-2x61-v43c.
+        # The advisory is informational for our purposes (no fixed version
+        # is available upstream yet — the v5 line is still in beta), so we
+        # explicitly opt out for CI runs only.
+        run: |
+          composer config audit.ignore.PKSA-5bdf-2x61-v43c "filament/tables v5 beta — no upstream fix yet, accepted for CI"
 
       - name: Install Composer dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction
