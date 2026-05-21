@@ -26,6 +26,16 @@ on:
         required: false
         type: boolean
         default: true
+      skip_filament_v5:
+        description: |
+          Skip the Filament v5 matrix entries (both L12+F5 and L13+F5).
+          Use temporarily when a transitive Codenzia plugin dep (e.g.
+          filament-media) hasn't shipped its v5 widening to the public
+          mirror yet, so composer can't resolve F5 even though this
+          package supports it.
+        required: false
+        type: boolean
+        default: false
       php_extensions:
         description: "PHP extensions installed on the runner"
         required: false
@@ -34,7 +44,7 @@ on:
 
 jobs:
   tests-filament:
-    if: ${{ ! inputs.pure_laravel }}
+    if: ${{ ! inputs.pure_laravel && ! inputs.skip_filament_v5 }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -43,6 +53,44 @@ jobs:
           - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '4.*' }
           - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '5.*' }
           - { php: '8.3', laravel: '13.*', testbench: '11.*', filament: '5.*' }
+    name: L${{ matrix.laravel }} F${{ matrix.filament }} PHP${{ matrix.php }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: ${{ inputs.php_extensions }}
+          tools: composer:v2
+          coverage: none
+      - name: Resolve composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-${{ hashFiles('composer.json') }}
+          restore-keys: |
+            ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-
+      - name: Pin Laravel, Testbench, Filament versions
+        run: |
+          composer require \
+            "laravel/framework:${{ matrix.laravel }}" \
+            "orchestra/testbench:${{ matrix.testbench }}" \
+            "filament/filament:${{ matrix.filament }}" \
+            --no-interaction --no-update --dev
+      - name: Install Composer dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction
+      - name: Execute tests
+        run: vendor/bin/pest --compact
+
+  tests-filament-v4-only:
+    if: ${{ ! inputs.pure_laravel && inputs.skip_filament_v5 }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '4.*' }
     name: L${{ matrix.laravel }} F${{ matrix.filament }} PHP${{ matrix.php }}
     steps:
       - uses: actions/checkout@v6
