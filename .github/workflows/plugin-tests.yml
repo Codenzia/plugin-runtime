@@ -36,6 +36,15 @@ on:
         required: false
         type: boolean
         default: false
+      skip_filament_v4:
+        description: |
+          Skip the Filament v4 matrix entry (L12+F4). Use when the plugin
+          has migrated to F5-only namespaces (e.g. Filament\Schemas) and
+          no longer compiles under F4. Pair with `skip_filament_v5: false`
+          for an F5-only build.
+        required: false
+        type: boolean
+        default: false
       php_extensions:
         description: "PHP extensions installed on the runner"
         required: false
@@ -44,7 +53,7 @@ on:
 
 jobs:
   tests-filament:
-    if: ${{ ! inputs.pure_laravel && ! inputs.skip_filament_v5 }}
+    if: ${{ ! inputs.pure_laravel && ! inputs.skip_filament_v5 && ! inputs.skip_filament_v4 }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -139,6 +148,56 @@ jobs:
         # under PKSA-5bdf-2x61-v43c. For CI runs (where we just want to
         # verify the build resolves), we disable the block per composer's
         # own error-message suggestion.
+        run: |
+          composer config audit.abandoned ignore
+          composer config audit.block-insecure false
+
+      - name: Install Composer dependencies
+        run: composer update --prefer-stable --prefer-dist --no-interaction
+
+      - name: Execute tests
+        run: vendor/bin/pest --compact
+
+  tests-filament-v5-only:
+    if: ${{ ! inputs.pure_laravel && inputs.skip_filament_v4 && ! inputs.skip_filament_v5 }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '5.*' }
+          - { php: '8.3', laravel: '13.*', testbench: '11.*', filament: '5.*' }
+    name: L${{ matrix.laravel }} F${{ matrix.filament }} PHP${{ matrix.php }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: ${{ inputs.php_extensions }}
+          tools: composer:v2
+          coverage: none
+
+      - name: Resolve composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-${{ hashFiles('composer.json') }}
+          restore-keys: |
+            ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-
+
+      - name: Pin Laravel, Testbench, Filament versions
+        run: |
+          composer require \
+            "laravel/framework:${{ matrix.laravel }}" \
+            "orchestra/testbench:${{ matrix.testbench }}" \
+            "filament/filament:${{ matrix.filament }}" \
+            --no-interaction --no-update --dev
+
+      - name: Disable composer audit block-insecure
         run: |
           composer config audit.abandoned ignore
           composer config audit.block-insecure false
