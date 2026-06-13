@@ -82,11 +82,17 @@ jobs:
           fi
           git config user.email "actions@github.com"
           git config user.name  "github-actions[bot]"
-          git remote add public "https://x-access-token:${GH_TOKEN}@github.com/${PUBLIC_REPO}.git"
+          git remote add public "https://github.com/${PUBLIC_REPO}.git"
+          # Ephemeral header-based auth: never written to .git/config (unlike a
+          # token-in-URL remote), so the PAT can't leak via a later config dump.
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          # Populate refs/remotes/public/<branch> so --force-with-lease has a
+          # lease to check; tolerate a not-yet-existing branch (first release).
+          git -c http.extraheader="$AUTH_HEADER" fetch public "+refs/heads/${TARGET_BRANCH}:refs/remotes/public/${TARGET_BRANCH}" || true
           echo "Pushing HEAD to ${PUBLIC_REPO}:${TARGET_BRANCH}"
-          git push public "HEAD:refs/heads/${TARGET_BRANCH}" --force-with-lease
+          git -c http.extraheader="$AUTH_HEADER" push public "HEAD:refs/heads/${TARGET_BRANCH}" --force-with-lease
           echo "Pushing tag ${GITHUB_REF_NAME} to ${PUBLIC_REPO}"
-          git push public "${GITHUB_REF_NAME}"
+          git -c http.extraheader="$AUTH_HEADER" push public "${GITHUB_REF_NAME}"
 
       - name: Extract release notes from CHANGELOG
         id: notes

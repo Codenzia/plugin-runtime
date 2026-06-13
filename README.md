@@ -111,4 +111,4 @@ jobs:
 Both reusable workflows accept inputs (PHP extensions, branch name, whether
 to run Pint, etc.) — see the `inputs:` blocks at the top of each workflow
 file for the full list. Defaults match the Codenzia plugin conventions
-(PHP 8.3, Laravel 11/12/13, Filament 4/5, Pest, Pint).
+(PHP 8.3, Laravel 12/13, Filament 4/5, Pest, Pint).

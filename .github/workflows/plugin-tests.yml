@@ -52,66 +52,36 @@ on:
         default: "mbstring, dom, fileinfo, gd, zip, sqlite, pdo_sqlite, sodium"
 
 jobs:
-  tests-filament:
-    if: ${{ ! inputs.pure_laravel && ! inputs.skip_filament_v5 && ! inputs.skip_filament_v4 }}
+  matrix:
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '4.*' }
-          - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '5.*' }
-          - { php: '8.3', laravel: '13.*', testbench: '11.*', filament: '5.*' }
-    name: L${{ matrix.laravel }} F${{ matrix.filament }} PHP${{ matrix.php }}
+    outputs:
+      include: ${{ steps.gen.outputs.include }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          extensions: ${{ inputs.php_extensions }}
-          tools: composer:v2
-          coverage: none
-      - name: Resolve composer cache directory
-        id: composer-cache
-        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
-        with:
-          path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-${{ hashFiles('composer.json') }}
-          restore-keys: |
-            ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-
-      - name: Pin Laravel, Testbench, Filament versions
+      - id: gen
+        env:
+          PURE: ${{ inputs.pure_laravel }}
+          SKIP4: ${{ inputs.skip_filament_v4 }}
+          SKIP5: ${{ inputs.skip_filament_v5 }}
         run: |
-          composer require \
-            "laravel/framework:${{ matrix.laravel }}" \
-            "orchestra/testbench:${{ matrix.testbench }}" \
-            "filament/filament:${{ matrix.filament }}" \
-            --no-interaction --no-update --dev
-      - name: Disable composer audit block-insecure
-        # Composer's audit.block-insecure feature refuses to install
-        # packages with active security advisories during the dependency
-        # resolution phase — that's blocking filament/tables v5.0.0-beta*
-        # under PKSA-5bdf-2x61-v43c. For CI runs (where we just want to
-        # verify the build resolves), we disable the block per composer's
-        # own error-message suggestion.
-        run: |
-          composer config audit.abandoned ignore
-          composer config audit.block-insecure false
+          if [ "$PURE" = "true" ]; then
+            INC='[{"php":"8.3","laravel":"12.*","testbench":"10.*"},{"php":"8.3","laravel":"13.*","testbench":"11.*"}]'
+          else
+            INC='['
+            [ "$SKIP4" != "true" ] && INC="$INC"'{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"4.*"},'
+            [ "$SKIP5" != "true" ] && INC="$INC"'{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"5.*"},{"php":"8.3","laravel":"13.*","testbench":"11.*","filament":"5.*"},'
+            INC="${INC%,}]"
+            [ "$INC" = "[]" ] && { echo "::error::skip_filament_v4 and skip_filament_v5 are both true — no Filament matrix would run. Pick one."; exit 1; }
+          fi
+          echo "include=$INC" >> "$GITHUB_OUTPUT"
 
-      - name: Install Composer dependencies
-        run: composer update --prefer-stable --prefer-dist --no-interaction
-      - name: Execute tests
-        run: vendor/bin/pest --compact
-
-  tests-filament-v4-only:
-    if: ${{ ! inputs.pure_laravel && inputs.skip_filament_v5 }}
+  tests:
+    needs: matrix
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '4.*' }
-    name: L${{ matrix.laravel }} F${{ matrix.filament }} PHP${{ matrix.php }}
+        include: ${{ fromJSON(needs.matrix.outputs.include) }}
+    name: L${{ matrix.laravel }}${{ matrix.filament && format(' F{0}', matrix.filament) || '' }} PHP${{ matrix.php }}
     steps:
       - uses: actions/checkout@v6
 
@@ -133,129 +103,26 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-
 
-      - name: Pin Laravel, Testbench, Filament versions
+      - name: Pin Laravel, Testbench (+ Filament) versions
+        env:
+          FILAMENT: ${{ matrix.filament }}
         run: |
-          composer require \
-            "laravel/framework:${{ matrix.laravel }}" \
-            "orchestra/testbench:${{ matrix.testbench }}" \
-            "filament/filament:${{ matrix.filament }}" \
-            --no-interaction --no-update --dev
+          PKGS=(
+            "laravel/framework:${{ matrix.laravel }}"
+            "orchestra/testbench:${{ matrix.testbench }}"
+          )
+          if [ -n "$FILAMENT" ]; then
+            PKGS+=("filament/filament:$FILAMENT")
+          fi
+          composer require "${PKGS[@]}" --no-interaction --no-update --dev
 
-      - name: Disable composer audit block-insecure
-        # Composer's audit.block-insecure feature refuses to install
-        # packages with active security advisories during the dependency
-        # resolution phase — that's blocking filament/tables v5.0.0-beta*
-        # under PKSA-5bdf-2x61-v43c. For CI runs (where we just want to
-        # verify the build resolves), we disable the block per composer's
-        # own error-message suggestion.
-        run: |
-          composer config audit.abandoned ignore
-          composer config audit.block-insecure false
-
-      - name: Install Composer dependencies
-        run: composer update --prefer-stable --prefer-dist --no-interaction
-
-      - name: Execute tests
-        run: vendor/bin/pest --compact
-
-  tests-filament-v5-only:
-    if: ${{ ! inputs.pure_laravel && inputs.skip_filament_v4 && ! inputs.skip_filament_v5 }}
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { php: '8.3', laravel: '12.*', testbench: '10.*', filament: '5.*' }
-          - { php: '8.3', laravel: '13.*', testbench: '11.*', filament: '5.*' }
-    name: L${{ matrix.laravel }} F${{ matrix.filament }} PHP${{ matrix.php }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          extensions: ${{ inputs.php_extensions }}
-          tools: composer:v2
-          coverage: none
-
-      - name: Resolve composer cache directory
-        id: composer-cache
-        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@v4
-        with:
-          path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-${{ hashFiles('composer.json') }}
-          restore-keys: |
-            ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-
-
-      - name: Pin Laravel, Testbench, Filament versions
-        run: |
-          composer require \
-            "laravel/framework:${{ matrix.laravel }}" \
-            "orchestra/testbench:${{ matrix.testbench }}" \
-            "filament/filament:${{ matrix.filament }}" \
-            --no-interaction --no-update --dev
-
-      - name: Disable composer audit block-insecure
-        run: |
-          composer config audit.abandoned ignore
-          composer config audit.block-insecure false
-
-      - name: Install Composer dependencies
-        run: composer update --prefer-stable --prefer-dist --no-interaction
-
-      - name: Execute tests
-        run: vendor/bin/pest --compact
-
-  tests-laravel:
-    if: ${{ inputs.pure_laravel }}
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { php: '8.3', laravel: '12.*', testbench: '10.*' }
-          - { php: '8.3', laravel: '13.*', testbench: '11.*' }
-    name: L${{ matrix.laravel }} PHP${{ matrix.php }}
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          extensions: ${{ inputs.php_extensions }}
-          tools: composer:v2
-          coverage: none
-
-      - name: Resolve composer cache directory
-        id: composer-cache
-        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@v4
-        with:
-          path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-${{ hashFiles('composer.json') }}
-          restore-keys: |
-            ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-
-
-      - name: Pin Laravel + Testbench versions
-        run: |
-          composer require \
-            "laravel/framework:${{ matrix.laravel }}" \
-            "orchestra/testbench:${{ matrix.testbench }}" \
-            --no-interaction --no-update --dev
-
-      - name: Disable composer audit block-insecure
-        # Composer's audit.block-insecure feature refuses to install
-        # packages with active security advisories during the dependency
-        # resolution phase — that's blocking filament/tables v5.0.0-beta*
-        # under PKSA-5bdf-2x61-v43c. For CI runs (where we just want to
-        # verify the build resolves), we disable the block per composer's
-        # own error-message suggestion.
-        run: |
-          composer config audit.abandoned ignore
-          composer config audit.block-insecure false
+      - name: Ignore known Filament v5 beta advisory
+        # Composer's audit.block-insecure feature refuses to install packages
+        # with active security advisories during dependency resolution — that's
+        # blocking filament/tables v5.0.0-beta* under PKSA-5bdf-2x61-v43c.
+        # Ignore just that advisory so other advisories still fail CI. Remove
+        # once Filament v5 stable ships.
+        run: composer config audit.ignore.PKSA-5bdf-2x61-v43c "Filament v5 beta — accepted for CI resolution"
 
       - name: Install Composer dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction
