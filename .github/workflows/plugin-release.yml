@@ -142,3 +142,28 @@ jobs:
           else
             gh release create "$TAG" $REPO_FLAG --title "$TAG" --notes "$RELEASE_NOTES"
           fi
+
+      - name: Notify Satis to rebuild the catalog
+        # The public tag just landed, so the private Composer index at
+        # packages.codenzia.com must reindex immediately — otherwise the release
+        # is invisible to consumers until the nightly rebuild (up to 24h stale).
+        # Reuses CODENZIA_PAT (a classic repo-scoped PAT can POST a
+        # repository_dispatch to Codenzia/satis). Non-fatal: nightly cron is the
+        # safety net, so a transient dispatch failure never fails the release.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.CODENZIA_PAT }}
+        run: |
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::CODENZIA_PAT empty; skipping Satis notify (nightly rebuild will catch this release)."
+            exit 0
+          fi
+          if curl -fsS -X POST \
+               -H "Authorization: Bearer ${GH_TOKEN}" \
+               -H "Accept: application/vnd.github+json" \
+               https://api.github.com/repos/Codenzia/satis/dispatches \
+               -d '{"event_type":"package-released"}'; then
+            echo "Dispatched package-released to Codenzia/satis."
+          else
+            echo "::warning::Satis dispatch failed; nightly rebuild will catch this release."
+          fi
