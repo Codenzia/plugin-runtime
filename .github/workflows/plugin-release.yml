@@ -59,6 +59,12 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # Don't leave the default github-actions token persisted in
+          # .git/config — it overrides the CODENZIA_PAT auth header on the
+          # mirror push, so the push goes out as github-actions[bot] and is
+          # denied (403) on the public repo. With this off, only the explicit
+          # PAT header is used.
+          persist-credentials: false
 
       - name: Verify tag shape
         run: |
