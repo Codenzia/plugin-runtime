@@ -122,7 +122,7 @@ jobs:
         # blocking filament/tables v5.0.0-beta* under PKSA-5bdf-2x61-v43c.
         # Ignore just that advisory so other advisories still fail CI. Remove
         # once Filament v5 stable ships.
-        run: composer config audit.ignore.PKSA-5bdf-2x61-v43c "Filament v5 beta — accepted for CI resolution"
+        run: composer config --json audit.ignore '["PKSA-5bdf-2x61-v43c"]'
 
       - name: Install Composer dependencies
         run: composer update --prefer-stable --prefer-dist --no-interaction
