@@ -164,12 +164,23 @@ jobs:
             echo "::warning::CODENZIA_PAT empty; skipping Satis notify (nightly rebuild will catch this release)."
             exit 0
           fi
+          # Send the composer package name (canonical in composer.json, even on
+          # -dev-suffixed repos) so Satis can run a fast partial rebuild for just
+          # this package instead of a ~10-min full scan. Missing/unreadable name
+          # degrades to the payload-less dispatch, which Satis treats as "full".
+          PKG=$(jq -r '.name // ""' composer.json 2>/dev/null || true)
+          if [ -n "$PKG" ]; then
+            PAYLOAD=$(jq -cn --arg p "$PKG" '{event_type: "package-released", client_payload: {package: $p}}')
+          else
+            echo "::warning::composer.json name unreadable; dispatching a full Satis rebuild."
+            PAYLOAD='{"event_type":"package-released"}'
+          fi
           if curl -fsS -X POST \
                -H "Authorization: Bearer ${GH_TOKEN}" \
                -H "Accept: application/vnd.github+json" \
                https://api.github.com/repos/Codenzia/satis/dispatches \
-               -d '{"event_type":"package-released"}'; then
-            echo "Dispatched package-released to Codenzia/satis."
+               -d "$PAYLOAD"; then
+            echo "Dispatched package-released to Codenzia/satis (package: ${PKG:-full rebuild})."
           else
             echo "::warning::Satis dispatch failed; nightly rebuild will catch this release."
           fi
