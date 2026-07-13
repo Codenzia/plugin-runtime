@@ -1,0 +1,61 @@
+name: check-dependencies
+
+# Reusable workflow (fleet-dependency-plan.md §7). Runs the central in-house
+# dependency-policy checker in Enforce mode against the *calling* repository.
+# The checker script is fetched from Codenzia/plugin-runtime at the exact commit
+# of this reusable workflow (github.job_workflow_sha), so the rules a consumer
+# runs are always the ones baked into the immutable tag it pinned (never @main).
+#
+# Consumer usage (pin by immutable tag):
+#
+#   jobs:
+#     dependencies:
+#       uses: Codenzia/plugin-runtime/.github/workflows/check-dependencies.yml@v1.0.0
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      root:
+        description: 'Directory to scan in the calling repo.'
+        required: false
+        type: string
+        default: '.'
+      baseline:
+        description: 'Optional path (in the calling repo) to a tolerated-violations JSON baseline.'
+        required: false
+        type: string
+        default: ''
+      runs_on:
+        description: 'Runner label.'
+        required: false
+        type: string
+        default: 'ubuntu-latest'
+    secrets:
+      CODENZIA_PAT:
+        description: 'Token able to read the private Codenzia/plugin-runtime repo (to fetch the checker script).'
+        required: false
+
+jobs:
+  check-dependencies:
+    runs-on: ${{ inputs.runs_on }}
+    steps:
+      - name: Check out calling repository
+        uses: actions/checkout@v4
+
+      - name: Fetch central dependency checker
+        uses: actions/checkout@v4
+        with:
+          repository: Codenzia/plugin-runtime
+          ref: ${{ github.job_workflow_sha }}
+          path: .dep-checker
+          token: ${{ secrets.CODENZIA_PAT || github.token }}
+
+      - name: Enforce stable Codenzia dependencies
+        shell: pwsh
+        run: |
+          $checkerArgs = @('-Root', '${{ inputs.root }}', '-Mode', 'Enforce')
+          if ('${{ inputs.baseline }}'.Trim()) {
+            $checkerArgs += @('-Baseline', '${{ inputs.baseline }}')
+          }
+          & ./.dep-checker/scripts/check-inhouse-dependencies.ps1 @checkerArgs

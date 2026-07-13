@@ -10,6 +10,7 @@ Two reusable workflows live here:
 |---|---|---|
 | [`plugin-tests.yml`](.github/workflows/plugin-tests.yml) | `push` to `main` + `pull_request` | Matrix Pest tests (Laravel 12/13 × Filament 4/5 for Filament plugins; Laravel 12/13 for pure-Laravel plugins) + `pint --test`. Laravel 11 was dropped from the default matrix on 2026-05-20 — no Codenzia app or plugin still runs on it. |
 | [`plugin-release.yml`](.github/workflows/plugin-release.yml) | `push` of a `v*` tag | Force-pushes the tagged commit + tag from the `-dev` repo to the public mirror, then creates a GitHub Release on the public repo. Packagist auto-detects via its webhook. |
+| [`check-dependencies.yml`](.github/workflows/check-dependencies.yml) | `push` / `pull_request` (via `uses:`) | Runs the central in-house dependency-policy checker (§7 of the fleet dependency plan) in **Enforce** mode against the calling repo. Fails CI on unsafe `codenzia/*` constraints, non-stable app `minimum-stability`, committed local overlays, and tracked `auth.json`. |
 
 ## Caller examples
 
@@ -105,6 +106,79 @@ jobs:
   Secrets and variables → Actions → New repository secret.
 - **Drop the two caller workflow files** (`.github/workflows/tests.yml` and
   `.github/workflows/release.yml`) into the `-dev` repo.
+
+## Dependency-policy enforcement (`check-dependencies.yml`)
+
+The [`scripts/check-inhouse-dependencies.ps1`](scripts/check-inhouse-dependencies.ps1)
+checker implements §7 of the approved Codenzia fleet dependency plan. It lives here
+**centrally** — one source of truth for ~30 repos — and every app repo calls it through
+the `check-dependencies.yml` reusable workflow, pinned by an **immutable tag** (never
+`@main`, which would let the rules drift under consumers).
+
+### What it rejects
+
+Scanning every committed `composer.json` under `-Root`, it flags:
+
+- unsafe `codenzia/*` constraints: `@dev`, `*@dev`, `dev-main`, `dev-master`,
+  `0.x-dev` (and other `*-dev` branch aliases), bare `*`, unbounded ranges
+  (`>=x` with no upper bound), dev/branch fallbacks after `||`, and commit-hash refs;
+- application manifests (`type: "project"` or requiring `laravel/framework`) whose
+  `minimum-stability` is not `stable`;
+- a git-tracked `composer.local.json` (local overlays must stay gitignored);
+- a committed `path`-type repository overlay inside a tracked `composer.json`;
+- a git-tracked `auth.json` (Satis credentials must never be committed).
+
+It ignores `vendor`, `node_modules`, `_archive`, `old-ignored`, `zipped files`,
+`_pre-fold-backup-*`, `dist`, `.build`, and `studio/demo-fleet`. Tracked-ness is
+resolved with `git ls-files`, so it works across nested repos.
+
+### Local usage (Windows + Herd → run via PowerShell)
+
+```powershell
+# Fleet survey — report everything, never fail:
+./scripts/check-inhouse-dependencies.ps1 -Root C:\mh2\Projects\Codenzia\GitHub -Mode Audit
+
+# Single-repo gate — exit 1 on any violation:
+./scripts/check-inhouse-dependencies.ps1 -Root . -Mode Enforce
+
+# Tolerate a documented backlog while migrating wave-by-wave:
+./scripts/check-inhouse-dependencies.ps1 -Root . -Mode Enforce -Baseline .dep-baseline.json
+
+# Also write the machine-readable report to a file:
+./scripts/check-inhouse-dependencies.ps1 -Root . -Mode Audit -JsonReport report.json
+```
+
+Output is both a human-readable table (with a rule-level summary) and a machine-readable
+JSON block (`file`, `dependency`, `constraint`, `rule`, `baselined`). A `-Baseline` JSON
+file is an array of tolerated-violation objects; any of `file` / `dependency` /
+`constraint` / `rule` present in an entry must match (absent fields are wildcards). Remove
+a repo's baseline entries once it is fully migrated.
+
+### CI usage (required §7 step — pin by immutable tag)
+
+Add a `dependencies` job to the app repo's CI, pinned to a released tag:
+
+```yaml
+jobs:
+  dependencies:
+    uses: Codenzia/plugin-runtime/.github/workflows/check-dependencies.yml@v1.0.0
+    secrets: inherit
+```
+
+Pass `secrets: inherit` so the workflow can read this private repo (via `CODENZIA_PAT`)
+to fetch the checker at the exact commit of the tag you pinned. Optional inputs: `root`
+(default `.`), `baseline` (path to a tolerated-violations file), `runs_on`
+(default `ubuntu-latest`).
+
+**Always pin `@v1.0.0` (or a later immutable tag), never `@main`.** The tag guarantees the
+policy a consumer enforces is frozen — the whole point of §7 is to stop the fleet depending
+on mutable branches. If a `raw` local step is preferred instead of the reusable workflow:
+
+```yaml
+- name: Enforce stable Codenzia dependencies
+  shell: pwsh
+  run: ./scripts/check-inhouse-dependencies.ps1 -Root . -Mode Enforce
+```
 
 ## Customization
 
