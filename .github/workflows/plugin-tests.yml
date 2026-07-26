@@ -86,13 +86,6 @@ jobs:
           || '[{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"4.*","pint":true},{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"5.*"},{"php":"8.3","laravel":"13.*","testbench":"11.*","filament":"5.*"}]'
           ) }}
     name: L${{ matrix.laravel }}${{ matrix.filament && format(' F{0}', matrix.filament) || '' }} PHP${{ matrix.php }}
-    env:
-      # Private Satis registry + private GitHub sources. Without this Composer
-      # gets HTTP 401 from packages.codenzia.com and dies with
-      # "You must be using the interactive console to authenticate".
-      COMPOSER_AUTH: >-
-        {"github-oauth":{"github.com":"${{ secrets.CODENZIA_PAT }}"},
-         "http-basic":{"packages.codenzia.com":{"username":"${{ secrets.SATIS_USER }}","password":"${{ secrets.SATIS_PASS }}"}}}
     steps:
       - name: Validate matrix inputs
         if: ${{ inputs.skip_filament_v4 && inputs.skip_filament_v5 }}
@@ -108,6 +101,29 @@ jobs:
           extensions: ${{ inputs.php_extensions }}
           tools: composer:v2, pint
           coverage: none
+
+      - name: Configure Composer authentication
+        # Without this Composer gets HTTP 401 from packages.codenzia.com and
+        # dies with "You must be using the interactive console to authenticate".
+        # Each block is emitted only when its secrets are actually present —
+        # an empty github-oauth token is worse than none, because Composer
+        # then sends empty credentials instead of falling back to anonymous.
+        env:
+          CODENZIA_PAT: ${{ secrets.CODENZIA_PAT }}
+          SATIS_USER: ${{ secrets.SATIS_USER }}
+          SATIS_PASS: ${{ secrets.SATIS_PASS }}
+        run: |
+          AUTH='{}'
+          if [ -n "$CODENZIA_PAT" ]; then
+            AUTH=$(jq -cn --arg t "$CODENZIA_PAT" --argjson a "$AUTH" \
+              '$a + {"github-oauth":{"github.com":$t}}')
+          fi
+          if [ -n "$SATIS_USER" ] && [ -n "$SATIS_PASS" ]; then
+            AUTH=$(jq -cn --arg u "$SATIS_USER" --arg p "$SATIS_PASS" --argjson a "$AUTH" \
+              '$a + {"http-basic":{"packages.codenzia.com":{"username":$u,"password":$p}}}')
+          fi
+          echo "::add-mask::$AUTH"
+          echo "COMPOSER_AUTH=$AUTH" >> "$GITHUB_ENV"
 
       - name: Resolve composer cache directory
         id: composer-cache
