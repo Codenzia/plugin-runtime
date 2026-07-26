@@ -5,6 +5,35 @@ All notable changes to the reusable workflows in this repository.
 Pre-1.0 SemVer, per the fleet dependency policy: **patch = compatible fix,
 minor = breaking or behaviour change**.
 
+## v1.2.2 — 2026-07-26
+
+### Fixed
+
+- **`composer update` is now retried on transient transport failures.** Since
+  v1.2.1 every one of the 16 consumers resolves through
+  `packages.codenzia.com`, making it a single point of failure for the whole
+  fleet's CI; a run during the v1.2.1 rollout died on `curl error 28 … Failed
+  to connect to packages.codenzia.com port 443 after 10006 ms` and was green on
+  re-run. Up to 3 attempts with 15s / 30s backoff.
+
+  Composer has no setting that covers this: `process-timeout` bounds a running
+  process rather than a TCP connect, `retry-auth-failure` only controls
+  re-prompting for credentials, and Composer's internal retries apply to
+  individual package downloads, not to the repository metadata fetch whose
+  failure aborts the whole resolution.
+
+  **Genuine failures are not retried.** If the output matches an
+  authentication error (`HTTP 401/403/404`, `URL required authentication`,
+  `interactive console to authenticate`, `{"message":"Not Found"}`) or a
+  resolution error (`Your requirements could not be resolved`, `could not be
+  found in any version`), the step fails immediately on the first attempt. A
+  returning `COMPOSER_AUTH` regression — the bug v1.2.0 fixed — must stay loud,
+  and retrying it would triple the billed minutes for a failure that cannot
+  succeed.
+
+No caller-visible interface change; `@v1.2.1` callers can move to `@v1.2.2`
+with no edit beyond the ref.
+
 ## v1.2.1 — 2026-07-26
 
 ### Fixed
