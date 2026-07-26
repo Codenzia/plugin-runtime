@@ -9,9 +9,15 @@ name: Plugin Tests (reusable)
 #
 #   jobs:
 #     tests:
-#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@main
+#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.0
 #       with:
 #         pure_laravel: false   # default; set true for non-Filament packages
+#       secrets: inherit        # REQUIRED — Composer needs the Satis credentials
+#
+# Callers MUST pass `secrets: inherit`. In-house packages resolve from the
+# private Satis registry at packages.codenzia.com, which needs the repo-level
+# SATIS_USER / SATIS_PASS secrets (org-level secrets resolve empty on the
+# GitHub Free org), plus CODENZIA_PAT for private GitHub sources.
 
 on:
   workflow_call:
@@ -22,7 +28,7 @@ on:
         type: boolean
         default: false
       pint:
-        description: "Run `pint --test` as a separate job"
+        description: "Run `pint --test` as a step of the first matrix leg"
         required: false
         type: boolean
         default: true
@@ -50,46 +56,57 @@ on:
         required: false
         type: string
         default: "mbstring, dom, fileinfo, gd, zip, sqlite, pdo_sqlite, sodium"
+    secrets:
+      CODENZIA_PAT:
+        description: "PAT with read access to private Codenzia/* package sources"
+        required: false
+      SATIS_USER:
+        description: "HTTP basic username for packages.codenzia.com"
+        required: false
+      SATIS_PASS:
+        description: "HTTP basic password for packages.codenzia.com"
+        required: false
 
 jobs:
-  matrix:
-    runs-on: ubuntu-24.04
-    outputs:
-      include: ${{ steps.gen.outputs.include }}
-    steps:
-      - id: gen
-        env:
-          PURE: ${{ inputs.pure_laravel }}
-          SKIP4: ${{ inputs.skip_filament_v4 }}
-          SKIP5: ${{ inputs.skip_filament_v5 }}
-        run: |
-          if [ "$PURE" = "true" ]; then
-            INC='[{"php":"8.3","laravel":"12.*","testbench":"10.*"},{"php":"8.3","laravel":"13.*","testbench":"11.*"}]'
-          else
-            INC='['
-            [ "$SKIP4" != "true" ] && INC="$INC"'{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"4.*"},'
-            [ "$SKIP5" != "true" ] && INC="$INC"'{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"5.*"},{"php":"8.3","laravel":"13.*","testbench":"11.*","filament":"5.*"},'
-            INC="${INC%,}]"
-            [ "$INC" = "[]" ] && { echo "::error::skip_filament_v4 and skip_filament_v5 are both true — no Filament matrix would run. Pick one."; exit 1; }
-          fi
-          echo "include=$INC" >> "$GITHUB_OUTPUT"
-
   tests:
-    needs: matrix
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
+      # Built inline — a dedicated job that only echoes this JSON cost a full
+      # billed minute per run across every consumer repo.
+      # `pint: true` marks the single leg that also runs the style check.
       matrix:
-        include: ${{ fromJSON(needs.matrix.outputs.include) }}
+        include: ${{ fromJSON(
+          inputs.pure_laravel
+            && '[{"php":"8.3","laravel":"12.*","testbench":"10.*","pint":true},{"php":"8.3","laravel":"13.*","testbench":"11.*"}]'
+          || inputs.skip_filament_v5
+            && '[{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"4.*","pint":true}]'
+          || inputs.skip_filament_v4
+            && '[{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"5.*","pint":true},{"php":"8.3","laravel":"13.*","testbench":"11.*","filament":"5.*"}]'
+          || '[{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"4.*","pint":true},{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"5.*"},{"php":"8.3","laravel":"13.*","testbench":"11.*","filament":"5.*"}]'
+          ) }}
     name: L${{ matrix.laravel }}${{ matrix.filament && format(' F{0}', matrix.filament) || '' }} PHP${{ matrix.php }}
+    env:
+      # Private Satis registry + private GitHub sources. Without this Composer
+      # gets HTTP 401 from packages.codenzia.com and dies with
+      # "You must be using the interactive console to authenticate".
+      COMPOSER_AUTH: >-
+        {"github-oauth":{"github.com":"${{ secrets.CODENZIA_PAT }}"},
+         "http-basic":{"packages.codenzia.com":{"username":"${{ secrets.SATIS_USER }}","password":"${{ secrets.SATIS_PASS }}"}}}
     steps:
+      - name: Validate matrix inputs
+        if: ${{ inputs.skip_filament_v4 && inputs.skip_filament_v5 }}
+        run: |
+          echo "::error::skip_filament_v4 and skip_filament_v5 are both true — no Filament matrix would run. Pick one."
+          exit 1
+
       - uses: actions/checkout@v6
 
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
           extensions: ${{ inputs.php_extensions }}
-          tools: composer:v2
+          tools: composer:v2, pint
           coverage: none
 
       - name: Resolve composer cache directory
@@ -130,18 +147,8 @@ jobs:
       - name: Execute tests
         run: vendor/bin/pest --compact
 
-  pint:
-    if: ${{ inputs.pint }}
-    runs-on: ubuntu-24.04
-    name: Pint
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.3'
-          tools: composer:v2, pint
-          coverage: none
-
       - name: Check code style
+        # Folded in from what used to be a standalone `pint` job — a whole
+        # runner per consumer repo for ~6 seconds of work.
+        if: ${{ inputs.pint && matrix.pint }}
         run: pint --test

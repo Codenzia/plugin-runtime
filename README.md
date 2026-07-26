@@ -23,9 +23,13 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   tests:
-    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@main
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.0
+    secrets: inherit
 ```
 
 ### Pure-Laravel plugin (`browser-console-dev/.github/workflows/tests.yml`)
@@ -37,12 +41,21 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   tests:
-    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@main
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.0
     with:
       pure_laravel: true
+    secrets: inherit
 ```
+
+> `secrets: inherit` is **required** on `plugin-tests.yml` callers. Composer
+> resolves in-house `codenzia/*` packages from the private Satis registry at
+> `packages.codenzia.com`; without the credentials every install dies with
+> `HTTP 401 … You must be using the interactive console to authenticate`.
 
 ### Release (`filament-panel-base-dev/.github/workflows/release.yml`)
 
@@ -75,10 +88,15 @@ jobs:
 
 ## Secrets
 
-- `CODENZIA_PAT` — classic personal access token with `repo` scope. Required
-  in the calling repo's secrets (org-level secrets don't propagate to private
-  repos on the GitHub Free plan). Used to force-push to the public mirror and
-  to create the GitHub Release on the public repo.
+All of these are **repo-level** secrets — org-level secrets don't propagate to
+private repos on the GitHub Free plan.
+
+- `CODENZIA_PAT` — classic personal access token with `repo` scope. Used to
+  force-push to the public mirror, to create the GitHub Release on the public
+  repo, and as Composer's `github-oauth` token for private package sources.
+- `SATIS_USER` / `SATIS_PASS` — HTTP basic credentials for the private Satis
+  registry `packages.codenzia.com`. Required by `plugin-tests.yml` on every
+  package that depends on another `codenzia/*` package.
 
 ## Release flow end-to-end
 
