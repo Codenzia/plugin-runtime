@@ -9,7 +9,7 @@ name: Plugin Tests (reusable)
 #
 #   jobs:
 #     tests:
-#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.0
+#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.2
 #       with:
 #         pure_laravel: false   # default; set true for non-Filament packages
 #       secrets: inherit        # REQUIRED — Composer needs the Satis credentials
@@ -158,7 +158,42 @@ jobs:
         run: composer config --json audit.ignore '["PKSA-5bdf-2x61-v43c"]'
 
       - name: Install Composer dependencies
-        run: composer update --prefer-stable --prefer-dist --no-interaction
+        # packages.codenzia.com is a single point of failure for every consumer
+        # of this workflow, and it does blip: one rollout run died on
+        # `curl error 28 … Failed to connect to packages.codenzia.com port 443
+        # after 10006 ms`, and the re-run was clean.
+        #
+        # Composer has no setting for this. `process-timeout` bounds a running
+        # process, not a TCP connect; `retry-auth-failure` only re-prompts for
+        # credentials; and Composer's internal retries cover individual package
+        # downloads, not the repository metadata fetch that failed here — which
+        # aborts the whole resolution. Hence the wrapper.
+        #
+        # It retries ONLY transport failures. Authentication, missing packages
+        # and unsatisfiable constraints exit on the first attempt: a recurring
+        # 401 is the exact bug v1.2.0 fixed, and burying it under three
+        # identical retries would hide its return and pay 3x the minutes for a
+        # failure that can never succeed.
+        env:
+          ATTEMPTS: '3'
+          LOG: ${{ runner.temp }}/composer-install.log
+        run: |
+          set -o pipefail
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            if composer update --prefer-stable --prefer-dist --no-interaction 2>&1 | tee "$LOG"; then
+              exit 0
+            fi
+            if grep -qiE 'HTTP(/[0-9.]+)? 40[134]|URL required authentication|interactive console to authenticate|\{"message":"Not Found"\}|Your requirements could not be resolved|could not be found in any version' "$LOG"; then
+              echo "::error::composer update failed with a non-transient error (authentication, missing package, or unsatisfiable constraints). Not retrying — fix the cause."
+              exit 1
+            fi
+            if [ "$attempt" -lt "$ATTEMPTS" ]; then
+              echo "::warning::composer update attempt ${attempt}/${ATTEMPTS} failed with a transient error; retrying in $((attempt * 15))s."
+              sleep $((attempt * 15))
+            fi
+          done
+          echo "::error::composer update still failing after ${ATTEMPTS} attempts — treat packages.codenzia.com as down."
+          exit 1
 
       - name: Execute tests
         run: vendor/bin/pest --compact
