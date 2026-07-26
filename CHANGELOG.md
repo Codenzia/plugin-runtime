@@ -5,6 +5,20 @@ All notable changes to the reusable workflows in this repository.
 Pre-1.0 SemVer, per the fleet dependency policy: **patch = compatible fix,
 minor = breaking or behaviour change**.
 
+## v1.2.1 — 2026-07-26
+
+### Fixed
+
+- `COMPOSER_AUTH` is now assembled with `jq` and includes each block only when
+  its secrets are non-empty. v1.2.0 always emitted
+  `{"github-oauth":{"github.com":""}}`, which is worse than omitting it — on the
+  consumers that have no `CODENZIA_PAT` (`filament-dam`,
+  `filament-release-tracker`, `laravel-ai-assistant`, `laravel-ai-translations`,
+  `laravel-superadmin`) Composer would send empty credentials to github.com
+  instead of falling back to anonymous access.
+
+**Consumers should pin `@v1.2.1`, not `@v1.2.0`.**
+
 ## v1.2.0 — 2026-07-26
 
 ### Fixed

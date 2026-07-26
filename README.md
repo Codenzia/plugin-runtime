@@ -28,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   tests:
-    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.0
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.1
     secrets: inherit
 ```
 
@@ -46,7 +46,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   tests:
-    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.0
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.1
     with:
       pure_laravel: true
     secrets: inherit
