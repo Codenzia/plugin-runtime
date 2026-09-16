@@ -1,0 +1,161 @@
+name: Plugin Tag (reusable)
+
+# Cuts a release from the Actions tab: computes the next version from the
+# latest v* tag on THIS repo, creates an annotated tag on the chosen branch
+# and pushes it with CODENZIA_PAT. The tag push then fires the caller's
+# tag-triggered workflows (release.yml / satis-on-tag.yml), which is what
+# reaches Satis and Packagist — this workflow itself only makes the tag.
+#
+# The push MUST use the PAT: a tag pushed with the default GITHUB_TOKEN never
+# triggers other workflows, so the release would silently stop here.
+#
+# Example caller in <plugin>/.github/workflows/tag.yml:
+#
+#   on:
+#     workflow_dispatch:
+#       inputs:
+#         bump:    { type: choice, options: [patch, minor, major], default: patch }
+#         version: { type: string, default: "" }
+#   jobs:
+#     tag:
+#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tag.yml@v1.3.0
+#       with:
+#         bump: ${{ inputs.bump }}
+#         version: ${{ inputs.version }}
+#         branch: ${{ github.ref_name }}
+#       secrets: inherit
+
+on:
+  workflow_call:
+    inputs:
+      bump:
+        description: "patch | minor | major — applied to the latest v* tag (first release -> v0.1.0)"
+        required: false
+        type: string
+        default: "patch"
+      version:
+        description: "Exact version override, e.g. 0.4.0. Wins over bump when set."
+        required: false
+        type: string
+        default: ""
+      branch:
+        description: "Branch whose head gets tagged"
+        required: false
+        type: string
+        default: "main"
+      tests_workflow:
+        description: "Workflow file whose latest run on the tagged commit must be green. Skipped when the file does not exist in the repo."
+        required: false
+        type: string
+        default: "tests.yml"
+      require_green_tests:
+        description: "Refuse to tag when the tests workflow has no successful run for the commit"
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      CODENZIA_PAT:
+        required: true
+
+jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout ${{ inputs.branch }} (full history + tags)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+          # Only the explicit PAT header may authenticate the push (see top).
+          persist-credentials: false
+
+      - name: Resolve the release tag
+        id: tag
+        env:
+          BUMP: ${{ inputs.bump }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          LATEST="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n1)"
+          if [ -n "$VERSION" ]; then
+            TAG="v${VERSION#v}"
+          else
+            case "$BUMP" in patch|minor|major) ;; *)
+              echo "::error::bump must be patch, minor or major (got '$BUMP')"; exit 1;; esac
+            if [ -z "$LATEST" ]; then
+              TAG="v0.1.0"
+            else
+              IFS=. read -r MA MI PA <<< "${LATEST#v}"; PA="${PA%%-*}"
+              case "$BUMP" in
+                patch) TAG="v${MA}.${MI}.$((PA + 1))" ;;
+                minor) TAG="v${MA}.$((MI + 1)).0" ;;
+                major) TAG="v$((MA + 1)).0.0" ;;
+              esac
+            fi
+          fi
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "::error::'$TAG' is not semver-shaped (vMAJOR.MINOR.PATCH[-PRERELEASE])"; exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists (points at $(git rev-parse --short "$TAG"^{commit})). Nothing to do."; exit 1
+          fi
+          if [ -n "$LATEST" ] && [ "$(printf '%s\n%s\n' "$LATEST" "$TAG" | sort -V | tail -n1)" != "$TAG" ]; then
+            echo "::error::$TAG is not newer than the latest tag $LATEST"; exit 1
+          fi
+          echo "latest=${LATEST:-none}" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Latest: ${LATEST:-none} -> next: $TAG at $(git rev-parse --short HEAD)"
+
+      - name: Require green tests on the tagged commit
+        if: ${{ inputs.require_green_tests }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW: ${{ inputs.tests_workflow }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ ! -f ".github/workflows/$WORKFLOW" ]; then
+            echo "::notice::No .github/workflows/$WORKFLOW in this repo; skipping the green-tests gate."
+            exit 0
+          fi
+          RESULT="$(gh run list --workflow "$WORKFLOW" --commit "$SHA" --limit 1 --json status,conclusion,url \
+                    --jq 'if length == 0 then "none - -" else .[0] | "\(.status) \(.conclusion) \(.url)" end')"
+          set -- $RESULT
+          case "$1 $2" in
+            "completed success") echo "Tests green: $3" ;;
+            "none -") echo "::error::No $WORKFLOW run found for $SHA. Wait for CI, or re-run with require_green_tests=false."; exit 1 ;;
+            completed*) echo "::error::$WORKFLOW concluded '${2}' for $SHA: ${3}"; exit 1 ;;
+            *) echo "::error::$WORKFLOW is still ${1} for $SHA: ${3}. Wait for it, then retry."; exit 1 ;;
+          esac
+
+      - name: Create and push the annotated tag
+        env:
+          GH_TOKEN: ${{ secrets.CODENZIA_PAT }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.email "dev@codenzia.com"
+          git config user.name  "Codenzia Release"
+          git tag -a "$TAG" -m "$TAG"
+          # Ephemeral header auth — the PAT is never written to .git/config.
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c http.extraheader="$AUTH_HEADER" push origin "refs/tags/$TAG"
+          echo "Pushed $TAG. The tag-triggered workflows on this repo take it from here."
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          LATEST: ${{ steps.tag.outputs.latest }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          {
+            echo "## Tagged \`$TAG\`"
+            echo
+            echo "- previous: \`$LATEST\`"
+            echo "- commit: \`$SHA\` on \`${{ inputs.branch }}\`"
+            echo "- next: watch the **release** / **Notify Satis on tag** run on this repo, then \`composer show -a <package> --no-cache\` from a consumer."
+          } >> "$GITHUB_STEP_SUMMARY"

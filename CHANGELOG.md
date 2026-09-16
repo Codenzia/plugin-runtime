@@ -5,6 +5,22 @@ All notable changes to the reusable workflows in this repository.
 Pre-1.0 SemVer, per the fleet dependency policy: **patch = compatible fix,
 minor = breaking or behaviour change**.
 
+## v1.3.0 — 2026-09-17
+
+### Added
+
+- **`plugin-tag.yml` — the "Cut release" button.** A `workflow_call` workflow
+  that turns a `workflow_dispatch` (bump `patch|minor|major`, or an exact
+  `version`) into an annotated `v*` tag on the chosen branch. It computes the
+  next version from the caller repo's own latest tag, refuses an existing or
+  non-increasing tag, and refuses unless the latest `tests.yml` run for that
+  commit concluded `success` (skipped with a notice when the repo has no
+  `tests.yml`; `require_green_tests: false` bypasses once). The tag is pushed
+  with `CODENZIA_PAT`, not `GITHUB_TOKEN`, because a token-pushed tag never
+  triggers the repo's tag-triggered workflows — and those (`release.yml`,
+  `satis-on-tag.yml`) are what publish to Satis and Packagist. Minor bump
+  because it is a new workflow, not a change to an existing one.
+
 ## v1.2.2 — 2026-07-26
 
 ### Fixed

@@ -10,6 +10,7 @@ Two reusable workflows live here:
 |---|---|---|
 | [`plugin-tests.yml`](.github/workflows/plugin-tests.yml) | `push` to `main` + `pull_request` | Matrix Pest tests (Laravel 12/13 × Filament 4/5 for Filament plugins; Laravel 12/13 for pure-Laravel plugins) + `pint --test`. Laravel 11 was dropped from the default matrix on 2026-05-20 — no Codenzia app or plugin still runs on it. |
 | [`plugin-release.yml`](.github/workflows/plugin-release.yml) | `push` of a `v*` tag | Force-pushes the tagged commit + tag from the `-dev` repo to the public mirror, then creates a GitHub Release on the public repo. Packagist auto-detects via its webhook. |
+| [`plugin-tag.yml`](.github/workflows/plugin-tag.yml) | `workflow_dispatch` (the "Cut release" button) | Computes the next `v*` tag from the caller repo's latest tag (or takes an exact version), refuses unless `tests.yml` is green on that commit, creates the annotated tag and pushes it with `CODENZIA_PAT` so the tag-triggered workflows fire. |
 | [`check-dependencies.yml`](.github/workflows/check-dependencies.yml) | `push` / `pull_request` (via `uses:`) | Runs the central in-house dependency-policy checker (§7 of the fleet dependency plan) in **Enforce** mode against the calling repo. Fails CI on unsafe `codenzia/*` constraints, non-stable app `minimum-stability`, committed local overlays, and tracked `auth.json`. |
 
 ## Caller examples
@@ -85,6 +86,27 @@ jobs:
     # public_repo omitted → workflow creates the release on the current repo
     secrets: inherit
 ```
+
+### Release button (`<plugin>/.github/workflows/tag.yml`)
+
+```yaml
+name: Cut release
+on:
+  workflow_dispatch:
+    inputs:
+      bump:    { type: choice, options: [patch, minor, major], default: patch }
+      version: { type: string, default: "" }
+jobs:
+  tag:
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tag.yml@v1.3.0
+    with:
+      bump: ${{ inputs.bump }}
+      version: ${{ inputs.version }}
+      branch: ${{ github.ref_name }}
+    secrets: inherit
+```
+
+The push uses `CODENZIA_PAT` on purpose: a tag pushed with `GITHUB_TOKEN` never triggers other workflows, so `release.yml` / `satis-on-tag.yml` would not run. Repos without a `tests.yml` skip the green gate with a notice; pass `require_green_tests: false` to bypass it once.
 
 ## Secrets
 
