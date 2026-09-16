@@ -98,6 +98,7 @@ on:
       version: { type: string, default: "" }
 jobs:
   tag:
+    permissions: { contents: read, actions: read }   # called workflow needs both
     uses: Codenzia/plugin-runtime/.github/workflows/plugin-tag.yml@v1.3.0
     with:
       bump: ${{ inputs.bump }}
