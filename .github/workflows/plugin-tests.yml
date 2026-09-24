@@ -9,17 +9,19 @@ name: Plugin Tests (reusable)
 #
 #   jobs:
 #     tests:
-#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.4.0
+#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.5.0
 #       with:
 #         pure_laravel: false   # default; set true for non-Filament packages
 #         database: mysql       # packages that ship database/migrations
 #       secrets: inherit        # REQUIRED — Composer needs the Satis credentials
 #
-# The suite runs on SQLite. `database: mysql` adds one job that applies the
-# package's migrations to a real MySQL 8, because SQLite silently tolerates DDL
-# that MySQL rejects: filament-dam shipped `->after('type')` naming a column
-# `media_files` does not have, and every MySQL install of the package failed
-# `migrate:fresh` for months while CI stayed green.
+# `database: mysql` adds one job that applies the package's migrations to a real
+# MySQL 8, because SQLite silently tolerates DDL that MySQL rejects: filament-dam
+# shipped `->after('type')` naming a column `media_files` does not have, and every
+# MySQL install of the package failed `migrate:fresh` for months while CI stayed
+# green. The Pest suite keeps running on SQLite in every leg — package test
+# bootstraps build their own schema per test and rely on a fresh `:memory:`
+# database, which MySQL has no equivalent of.
 #
 # Callers MUST pass `secrets: inherit`. In-house packages resolve from the
 # private Satis registry at packages.codenzia.com, which needs the repo-level
@@ -65,12 +67,12 @@ on:
         default: "mbstring, dom, fileinfo, gd, zip, sqlite, pdo_sqlite, sodium"
       database:
         description: |
-          Database the suite runs against: `sqlite` (default — nothing changes)
-          or `mysql`. `mysql` adds ONE extra job with a MySQL 8 service that
-          actually applies the package's migrations, catching the DDL that
-          SQLite silently tolerates — an `->after()` anchor naming a column the
-          table does not have, MySQL-only syntax, ENUM/JSON differences. Only
-          useful for packages that ship `database/migrations`.
+          `sqlite` (default — nothing changes) or `mysql`. `mysql` adds ONE extra
+          job with a MySQL 8 service that actually applies the package's
+          migrations, catching the DDL that SQLite silently tolerates — an
+          `->after()` anchor naming a column the table does not have, MySQL-only
+          syntax, ENUM/JSON differences. The Pest suite still runs on SQLite.
+          Only useful for packages that ship `database/migrations`.
         required: false
         type: string
         default: "sqlite"
@@ -231,6 +233,13 @@ jobs:
   # Only spun up when the caller passes `database: mysql`. One job, not a matrix
   # dimension: Actions bills per job, and the point of this leg is the DDL, which
   # does not vary across the Laravel/Filament combinations.
+  #
+  # Migrations only — the Pest suite is NOT re-run here. Package test bootstraps
+  # own their schema (several `Schema::create('users')` in a `beforeEach` with no
+  # drop) and lean on Testbench handing every test a fresh `:memory:` SQLite
+  # database. Against one persistent MySQL database the second test dies on
+  # `SQLSTATE[42S01] … Table 'users' already exists`, which says nothing about the
+  # package. Making those suites connection-agnostic is per-package work.
   mysql:
     if: ${{ inputs.database == 'mysql' }}
     runs-on: ubuntu-24.04
@@ -244,7 +253,7 @@ jobs:
             && '[{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"5.*"}]'
           || '[{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"4.*"}]'
           ) }}
-    name: MySQL 8 L${{ matrix.laravel }}${{ matrix.filament && format(' F{0}', matrix.filament) || '' }} PHP${{ matrix.php }}
+    name: MySQL 8 migrations L${{ matrix.laravel }}${{ matrix.filament && format(' F{0}', matrix.filament) || '' }} PHP${{ matrix.php }}
     services:
       mysql:
         image: mysql:8
@@ -409,6 +418,3 @@ jobs:
             vendor/bin/testbench migrate --database=mysql --path="$path" --realpath --no-interaction
             echo "::endgroup::"
           done
-
-      - name: Execute tests
-        run: vendor/bin/pest --compact

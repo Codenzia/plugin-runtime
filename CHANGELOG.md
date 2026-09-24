@@ -5,6 +5,26 @@ All notable changes to the reusable workflows in this repository.
 Pre-1.0 SemVer, per the fleet dependency policy: **patch = compatible fix,
 minor = breaking or behaviour change**.
 
+## v1.5.0 — 2026-09-24
+
+### Changed
+
+- **The `mysql` leg applies the migrations; it no longer re-runs the Pest
+  suite.** v1.4.0 also exported `DB_CONNECTION=mysql` to `vendor/bin/pest`. That
+  is not portable across the fleet's test bootstraps: several packages build
+  their own schema inside a `beforeEach` — `Schema::create('users', …)` with no
+  matching drop — because Testbench hands every test a fresh `:memory:` SQLite
+  database. One persistent MySQL database has no equivalent, so the second test
+  dies on `SQLSTATE[42S01]: Base table or view already exists: 1050 Table
+  'users' already exists`, which says nothing about the package.
+  `codenzia/filament-comments` went red on exactly that: 240 failures, its
+  migrations green. Making a suite connection-agnostic is per-package work, so
+  the shared workflow stops pretending otherwise.
+
+  The leg still does the thing it was added for — real MySQL DDL, with the
+  SQLSTATE as the job's failure. `database: mysql` callers need no edit beyond
+  the ref.
+
 ## v1.4.0 — 2026-09-24
 
 ### Added
