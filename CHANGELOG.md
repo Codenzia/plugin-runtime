@@ -5,6 +5,45 @@ All notable changes to the reusable workflows in this repository.
 Pre-1.0 SemVer, per the fleet dependency policy: **patch = compatible fix,
 minor = breaking or behaviour change**.
 
+## v1.4.0 — 2026-09-24
+
+### Added
+
+- **`plugin-tests.yml` — a `database` input (`sqlite` | `mysql`, default
+  `sqlite`).** `mysql` adds ONE job — not a matrix dimension, Actions bills per
+  job — that brings up a `mysql:8` service, applies the package's migrations to
+  it for real, and then runs the suite with `DB_CONNECTION=mysql`. The SQLite
+  legs are untouched, so every existing caller behaves exactly as before.
+
+  SQLite ignores `->after()`, accepts a foreign key to a table that does not
+  exist and swallows several column changes MySQL rejects. A package migration
+  can therefore be broken for every MySQL install while CI stays green — which
+  is what happened: `codenzia/filament-dam` shipped
+  `$table->foreignId('content_type_id')->after('type')` against a `media_files`
+  table with no `type` column, and every MySQL `migrate:fresh` of the package
+  died on `SQLSTATE[42S22]: Column not found: 1054 Unknown column 'type' in
+  'media_files'` for months.
+
+  The MySQL job migrates in install order: a minimal host `users` table (the
+  Testbench skeleton ships no migrations, and MySQL — unlike SQLite — refuses a
+  foreign key to a table that does not exist yet), then each
+  `vendor/codenzia/*/database/migrations`, then the package's own. Same-named
+  migrations are recorded once, so a file a package still ships under a
+  dependency's filename is skipped here exactly as it would be in an app.
+
+  Enable it on any package that ships `database/migrations`:
+
+  ```yaml
+  jobs:
+    tests:
+      uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.4.0
+      with:
+        database: mysql
+      secrets: inherit
+  ```
+
+  Minor bump: a new input and a new job, no change to the existing interface.
+
 ## v1.3.0 — 2026-09-17
 
 ### Added

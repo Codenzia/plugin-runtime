@@ -9,10 +9,17 @@ name: Plugin Tests (reusable)
 #
 #   jobs:
 #     tests:
-#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.2
+#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.4.0
 #       with:
 #         pure_laravel: false   # default; set true for non-Filament packages
+#         database: mysql       # packages that ship database/migrations
 #       secrets: inherit        # REQUIRED — Composer needs the Satis credentials
+#
+# The suite runs on SQLite. `database: mysql` adds one job that applies the
+# package's migrations to a real MySQL 8, because SQLite silently tolerates DDL
+# that MySQL rejects: filament-dam shipped `->after('type')` naming a column
+# `media_files` does not have, and every MySQL install of the package failed
+# `migrate:fresh` for months while CI stayed green.
 #
 # Callers MUST pass `secrets: inherit`. In-house packages resolve from the
 # private Satis registry at packages.codenzia.com, which needs the repo-level
@@ -56,6 +63,17 @@ on:
         required: false
         type: string
         default: "mbstring, dom, fileinfo, gd, zip, sqlite, pdo_sqlite, sodium"
+      database:
+        description: |
+          Database the suite runs against: `sqlite` (default — nothing changes)
+          or `mysql`. `mysql` adds ONE extra job with a MySQL 8 service that
+          actually applies the package's migrations, catching the DDL that
+          SQLite silently tolerates — an `->after()` anchor naming a column the
+          table does not have, MySQL-only syntax, ENUM/JSON differences. Only
+          useful for packages that ship `database/migrations`.
+        required: false
+        type: string
+        default: "sqlite"
     secrets:
       CODENZIA_PAT:
         description: "PAT with read access to private Codenzia/* package sources"
@@ -91,6 +109,12 @@ jobs:
         if: ${{ inputs.skip_filament_v4 && inputs.skip_filament_v5 }}
         run: |
           echo "::error::skip_filament_v4 and skip_filament_v5 are both true — no Filament matrix would run. Pick one."
+          exit 1
+
+      - name: Validate the database input
+        if: ${{ inputs.database != 'sqlite' && inputs.database != 'mysql' }}
+        run: |
+          echo "::error::database must be 'sqlite' or 'mysql' (got '${{ inputs.database }}')."
           exit 1
 
       - uses: actions/checkout@v6
@@ -203,3 +227,188 @@ jobs:
         # runner per consumer repo for ~6 seconds of work.
         if: ${{ inputs.pint && matrix.pint }}
         run: pint --test
+
+  # Only spun up when the caller passes `database: mysql`. One job, not a matrix
+  # dimension: Actions bills per job, and the point of this leg is the DDL, which
+  # does not vary across the Laravel/Filament combinations.
+  mysql:
+    if: ${{ inputs.database == 'mysql' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(
+          inputs.pure_laravel
+            && '[{"php":"8.3","laravel":"12.*","testbench":"10.*"}]'
+          || inputs.skip_filament_v4
+            && '[{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"5.*"}]'
+          || '[{"php":"8.3","laravel":"12.*","testbench":"10.*","filament":"4.*"}]'
+          ) }}
+    name: MySQL 8 L${{ matrix.laravel }}${{ matrix.filament && format(' F{0}', matrix.filament) || '' }} PHP${{ matrix.php }}
+    services:
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: package_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -uroot -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+    env:
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: "3306"
+      DB_DATABASE: package_test
+      DB_USERNAME: root
+      DB_PASSWORD: root
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: ${{ inputs.php_extensions }}, pdo_mysql, mysqli
+          tools: composer:v2
+          coverage: none
+
+      - name: Configure Composer authentication
+        env:
+          CODENZIA_PAT: ${{ secrets.CODENZIA_PAT }}
+          SATIS_USER: ${{ secrets.SATIS_USER }}
+          SATIS_PASS: ${{ secrets.SATIS_PASS }}
+        run: |
+          AUTH='{}'
+          if [ -n "$CODENZIA_PAT" ]; then
+            AUTH=$(jq -cn --arg t "$CODENZIA_PAT" --argjson a "$AUTH" \
+              '$a + {"github-oauth":{"github.com":$t}}')
+          fi
+          if [ -n "$SATIS_USER" ] && [ -n "$SATIS_PASS" ]; then
+            AUTH=$(jq -cn --arg u "$SATIS_USER" --arg p "$SATIS_PASS" --argjson a "$AUTH" \
+              '$a + {"http-basic":{"packages.codenzia.com":{"username":$u,"password":$p}}}')
+          fi
+          echo "::add-mask::$AUTH"
+          echo "COMPOSER_AUTH=$AUTH" >> "$GITHUB_ENV"
+
+      - name: Resolve composer cache directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-${{ hashFiles('composer.json') }}
+          restore-keys: |
+            ${{ runner.os }}-php${{ matrix.php }}-laravel${{ matrix.laravel }}-filament${{ matrix.filament }}-
+
+      - name: Pin Laravel, Testbench (+ Filament) versions
+        env:
+          FILAMENT: ${{ matrix.filament }}
+        run: |
+          PKGS=(
+            "laravel/framework:${{ matrix.laravel }}"
+            "orchestra/testbench:${{ matrix.testbench }}"
+          )
+          if [ -n "$FILAMENT" ]; then
+            PKGS+=("filament/filament:$FILAMENT")
+          fi
+          composer require "${PKGS[@]}" --no-interaction --no-update --dev
+
+      - name: Ignore known Filament v5 beta advisory
+        run: composer config --json audit.ignore '["PKSA-5bdf-2x61-v43c"]'
+
+      - name: Install Composer dependencies
+        env:
+          ATTEMPTS: '3'
+          LOG: ${{ runner.temp }}/composer-install.log
+        run: |
+          set -o pipefail
+          for attempt in $(seq 1 "$ATTEMPTS"); do
+            if composer update --prefer-stable --prefer-dist --no-interaction 2>&1 | tee "$LOG"; then
+              exit 0
+            fi
+            if grep -qiE 'HTTP(/[0-9.]+)? 40[134]|URL required authentication|interactive console to authenticate|\{"message":"Not Found"\}|Your requirements could not be resolved|could not be found in any version' "$LOG"; then
+              echo "::error::composer update failed with a non-transient error (authentication, missing package, or unsatisfiable constraints). Not retrying — fix the cause."
+              exit 1
+            fi
+            if [ "$attempt" -lt "$ATTEMPTS" ]; then
+              echo "::warning::composer update attempt ${attempt}/${ATTEMPTS} failed with a transient error; retrying in $((attempt * 15))s."
+              sleep $((attempt * 15))
+            fi
+          done
+          echo "::error::composer update still failing after ${ATTEMPTS} attempts — treat packages.codenzia.com as down."
+          exit 1
+
+      - name: Stage the host `users` table
+        # Testbench's skeleton ships no migrations, so nothing creates `users`.
+        # Package migrations legitimately reference it (`constrained('users')`,
+        # `Schema::table('users')`), and MySQL — unlike SQLite — refuses a
+        # foreign key to a table that does not exist yet. This is the minimal
+        # host table every Laravel app has, nothing more.
+        env:
+          HOST_MIGRATIONS: ${{ runner.temp }}/host-migrations
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOST_MIGRATIONS"
+          cat > "$HOST_MIGRATIONS/0000_00_00_000000_create_users_table.php" <<'PHP'
+          <?php
+
+          use Illuminate\Database\Migrations\Migration;
+          use Illuminate\Database\Schema\Blueprint;
+          use Illuminate\Support\Facades\Schema;
+
+          return new class extends Migration
+          {
+              public function up(): void
+              {
+                  Schema::create('users', function (Blueprint $table): void {
+                      $table->id();
+                      $table->string('name');
+                      $table->string('email')->unique();
+                      $table->timestamp('email_verified_at')->nullable();
+                      $table->string('password');
+                      $table->rememberToken();
+                      $table->timestamps();
+                  });
+              }
+          };
+          PHP
+          echo "HOST_MIGRATIONS=$HOST_MIGRATIONS" >> "$GITHUB_ENV"
+
+      - name: Migrate the package on MySQL
+        # The reason this leg exists. SQLite ignores `->after()`, tolerates a
+        # foreign key to a table that does not exist and accepts several
+        # MySQL-invalid column changes, so a migration can be broken for every
+        # MySQL install of a package while CI stays green. Running the real DDL
+        # turns the SQLSTATE into the job's failure.
+        #
+        # In-house dependencies migrate first, then this package: that is a real
+        # install, where a dependency owns the base tables and this package
+        # alters them. Same-named migrations are recorded once, so a file a
+        # package still ships under a dependency's filename is skipped here
+        # exactly as it would be in an app.
+        run: |
+          set -euo pipefail
+          if [ ! -d database/migrations ]; then
+            echo "::error::database: mysql was requested but this package ships no database/migrations."
+            exit 1
+          fi
+          PATHS=("$HOST_MIGRATIONS")
+          for dir in vendor/codenzia/*/database/migrations; do
+            if [ -d "$dir" ]; then
+              PATHS+=("$(realpath "$dir")")
+            fi
+          done
+          PATHS+=("$(realpath database/migrations)")
+          vendor/bin/testbench db:wipe --database=mysql
+          for path in "${PATHS[@]}"; do
+            echo "::group::migrate $path"
+            vendor/bin/testbench migrate --database=mysql --path="$path" --realpath --no-interaction
+            echo "::endgroup::"
+          done
+
+      - name: Execute tests
+        run: vendor/bin/pest --compact

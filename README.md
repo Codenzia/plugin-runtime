@@ -8,7 +8,7 @@ Two reusable workflows live here:
 
 | Workflow | Trigger in caller | Purpose |
 |---|---|---|
-| [`plugin-tests.yml`](.github/workflows/plugin-tests.yml) | `push` to `main` + `pull_request` | Matrix Pest tests (Laravel 12/13 × Filament 4/5 for Filament plugins; Laravel 12/13 for pure-Laravel plugins) + `pint --test`. Laravel 11 was dropped from the default matrix on 2026-05-20 — no Codenzia app or plugin still runs on it. |
+| [`plugin-tests.yml`](.github/workflows/plugin-tests.yml) | `push` to `main` + `pull_request` | Matrix Pest tests (Laravel 12/13 × Filament 4/5 for Filament plugins; Laravel 12/13 for pure-Laravel plugins) + `pint --test`, on SQLite. `database: mysql` adds one job that applies the package's migrations to a real MySQL 8. Laravel 11 was dropped from the default matrix on 2026-05-20 — no Codenzia app or plugin still runs on it. |
 | [`plugin-release.yml`](.github/workflows/plugin-release.yml) | `push` of a `v*` tag | Force-pushes the tagged commit + tag from the `-dev` repo to the public mirror, then creates a GitHub Release on the public repo. Packagist auto-detects via its webhook. |
 | [`plugin-tag.yml`](.github/workflows/plugin-tag.yml) | `workflow_dispatch` (the "Cut release" button) | Computes the next `v*` tag from the caller repo's latest tag (or takes an exact version), refuses unless `tests.yml` is green on that commit, creates the annotated tag and pushes it with `CODENZIA_PAT` so the tag-triggered workflows fire. |
 | [`check-dependencies.yml`](.github/workflows/check-dependencies.yml) | `push` / `pull_request` (via `uses:`) | Runs the central in-house dependency-policy checker (§7 of the fleet dependency plan) in **Enforce** mode against the calling repo. Fails CI on unsafe `codenzia/*` constraints, non-stable app `minimum-stability`, committed local overlays, and tracked `auth.json`. |
@@ -29,7 +29,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   tests:
-    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.2
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.4.0
     secrets: inherit
 ```
 
@@ -47,11 +47,40 @@ concurrency:
   cancel-in-progress: true
 jobs:
   tests:
-    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.2.2
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.4.0
     with:
       pure_laravel: true
     secrets: inherit
 ```
+
+### Plugin that ships migrations
+
+Add `database: mysql`. The SQLite legs are unchanged; one extra job brings up a
+MySQL 8 service, applies the package's migrations for real and then runs the
+suite against MySQL.
+
+```yaml
+jobs:
+  tests:
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-tests.yml@v1.4.0
+    with:
+      database: mysql
+    secrets: inherit
+```
+
+SQLite ignores `->after()`, accepts a foreign key to a table that does not
+exist and swallows several column changes MySQL rejects — so a migration can be
+broken for every MySQL install of a package while CI stays green. That is not
+hypothetical: `codenzia/filament-dam` shipped
+`$table->foreignId('content_type_id')->after('type')` against a `media_files`
+table with no `type` column, and every MySQL `migrate:fresh` died on
+`SQLSTATE[42S22]: Column not found: 1054 Unknown column 'type' in 'media_files'`
+for months.
+
+The MySQL job migrates in install order — a minimal host `users` table (the
+Testbench skeleton ships none, and MySQL refuses a foreign key to a missing
+table), then each `vendor/codenzia/*/database/migrations`, then the package's
+own. Same-named migrations are recorded once, exactly as in an app.
 
 > `secrets: inherit` is **required** on `plugin-tests.yml` callers. Composer
 > resolves in-house `codenzia/*` packages from the private Satis registry at
