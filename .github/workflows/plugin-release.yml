@@ -1,21 +1,29 @@
 name: Plugin Release (reusable)
 
-# Reusable release workflow. Triggered when a `v*` tag is pushed to the
-# caller's repo (typically a `-dev` private repo). Mirrors the tagged
-# commit + tag to the public repo, then creates a GitHub Release there.
-# Packagist auto-detects the new tag via its webhook on the public repo
-# — no Packagist-specific step is needed once the package is submitted.
+# Reusable release workflow with two entry points:
+#
+#   * A pushed `v*` tag (the "Cut release" button) is a PRIVATE release only:
+#     a GitHub Release on the caller repo when that repo is private, plus the
+#     Satis notify so packages.codenzia.com lists the version. It never pushes
+#     to a public mirror and never creates a release on a public repo.
+#   * `workflow_dispatch` run from the tag ref ("Release to public", pressed by
+#     the owner) additionally mirrors the tagged commit + tag to `public_repo`
+#     and creates the GitHub Release there. Packagist picks the tag up via its
+#     webhook on the public repo.
 #
 # Example caller in <plugin>-dev/.github/workflows/release.yml:
 #
 #   on:
 #     push:
 #       tags: ['v*']
+#     workflow_dispatch:      # Run workflow -> "Use workflow from" = the tag
 #   jobs:
 #     release:
-#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-release.yml@main
+#       permissions:
+#         contents: write
+#       uses: Codenzia/plugin-runtime/.github/workflows/plugin-release.yml@v1.6.0
 #       with:
-#         public_repo: Codenzia/filament-panel-base   # omit for public-only repos
+#         public_repo: Codenzia/filament-panel-base   # omit when there is no mirror
 #       secrets: inherit
 
 on:
@@ -24,9 +32,9 @@ on:
       public_repo:
         description: |
           Public mirror repo in <org/name> format, e.g. "Codenzia/filament-panel-base".
-          When set, the workflow force-pushes HEAD + the triggering tag to that repo
-          (uses CODENZIA_PAT). When empty, the workflow assumes the caller IS the
-          public repo and only creates the GitHub Release.
+          When set, a workflow_dispatch run pushes HEAD + the tag to that repo
+          (uses CODENZIA_PAT). Tag-push runs never touch it. When empty, the
+          GitHub Release is created on the caller repo.
         required: false
         type: string
         default: ""
@@ -68,14 +76,39 @@ jobs:
 
       - name: Verify tag shape
         run: |
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "Refusing to release: run this from a tag ref (Run workflow -> Use workflow from -> Tags -> vX.Y.Z), not '${GITHUB_REF_NAME}'." >&2
+            exit 1
+          fi
           if [[ ! "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
             echo "Refusing to release: tag '${GITHUB_REF_NAME}' is not semver-shaped (vMAJOR.MINOR.PATCH[-PRERELEASE])" >&2
             exit 1
           fi
-          echo "tag: ${GITHUB_REF_NAME}"
+          echo "tag: ${GITHUB_REF_NAME} (event: ${GITHUB_EVENT_NAME})"
+
+      - name: Decide what this run may publish
+        # Public surfaces (the mirror, a release on a public repo, and through
+        # them Packagist) are owner-click only: they need a workflow_dispatch.
+        # A tag push stays private. `repository.private` is the caller repo.
+        id: scope
+        env:
+          PUBLIC_REPO: ${{ inputs.public_repo }}
+          CALLER_PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "public=true" >> "$GITHUB_OUTPUT"
+            echo "Manual public release: mirror + release on the public repo are allowed."
+            exit 0
+          fi
+          echo "public=false" >> "$GITHUB_OUTPUT"
+          if [ -n "$PUBLIC_REPO" ]; then
+            echo "::notice::Tag push: Satis only. Publish to ${PUBLIC_REPO} with the release workflow's 'Run workflow' button on tag ${GITHUB_REF_NAME}."
+          elif [ "$CALLER_PRIVATE" != "true" ]; then
+            echo "::notice::This repo is public, so no GitHub Release is created on a tag push. Create it with 'Run workflow' on tag ${GITHUB_REF_NAME}."
+          fi
 
       - name: Push commit + tag to public mirror
-        if: ${{ inputs.public_repo != '' }}
+        if: ${{ inputs.public_repo != '' && steps.scope.outputs.public == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.CODENZIA_PAT }}
           PUBLIC_REPO: ${{ inputs.public_repo }}
@@ -129,7 +162,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
-        if: ${{ inputs.create_github_release }}
+        # Tag push: only on a private caller with no mirror. Dispatch: always.
+        if: ${{ inputs.create_github_release && (steps.scope.outputs.public == 'true' || (inputs.public_repo == '' && github.event.repository.private)) }}
         env:
           GH_TOKEN: ${{ secrets.CODENZIA_PAT || secrets.GITHUB_TOKEN }}
           PUBLIC_REPO: ${{ inputs.public_repo }}

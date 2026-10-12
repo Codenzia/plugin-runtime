@@ -9,7 +9,7 @@ Two reusable workflows live here:
 | Workflow | Trigger in caller | Purpose |
 |---|---|---|
 | [`plugin-tests.yml`](.github/workflows/plugin-tests.yml) | `push` to `main` + `pull_request` | Matrix Pest tests (Laravel 12/13 × Filament 4/5 for Filament plugins; Laravel 12/13 for pure-Laravel plugins) + `pint --test`, on SQLite. `database: mysql` adds one job that applies the package's migrations to a real MySQL 8 (the suite itself stays on SQLite). Laravel 11 was dropped from the default matrix on 2026-05-20 — no Codenzia app or plugin still runs on it. |
-| [`plugin-release.yml`](.github/workflows/plugin-release.yml) | `push` of a `v*` tag | Force-pushes the tagged commit + tag from the `-dev` repo to the public mirror, then creates a GitHub Release on the public repo. Packagist auto-detects via its webhook. |
+| [`plugin-release.yml`](.github/workflows/plugin-release.yml) | `push` of a `v*` tag; `workflow_dispatch` on a tag | Tag push = private release only: GitHub Release on a private caller + Satis notify. Public mirroring (tagged commit + tag to `public_repo`, GitHub Release there, Packagist via its webhook) runs **only** on a manual `workflow_dispatch` from the tag ref. |
 | [`plugin-tag.yml`](.github/workflows/plugin-tag.yml) | `workflow_dispatch` (the "Cut release" button) | Computes the next `v*` tag from the caller repo's latest tag (or takes an exact version), refuses unless `tests.yml` is green on that commit, creates the annotated tag and pushes it with `CODENZIA_PAT` so the tag-triggered workflows fire. |
 | [`check-dependencies.yml`](.github/workflows/check-dependencies.yml) | `push` / `pull_request` (via `uses:`) | Runs the central in-house dependency-policy checker (§7 of the fleet dependency plan) in **Enforce** mode against the calling repo. Fails CI on unsafe `codenzia/*` constraints, non-stable app `minimum-stability`, committed local overlays, and tracked `auth.json`. |
 
@@ -99,10 +99,13 @@ package. Making a suite connection-agnostic is per-package work.
 name: release
 on:
   push:
-    tags: ['v*']
+    tags: ['v*']        # Satis only
+  workflow_dispatch:    # "Release to public": Run workflow -> Use workflow from -> Tags -> vX.Y.Z
 jobs:
   release:
-    uses: Codenzia/plugin-runtime/.github/workflows/plugin-release.yml@main
+    permissions:
+      contents: write
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-release.yml@v1.6.0
     with:
       public_repo: Codenzia/filament-panel-base
     secrets: inherit
@@ -115,10 +118,15 @@ name: release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
 jobs:
   release:
-    uses: Codenzia/plugin-runtime/.github/workflows/plugin-release.yml@main
-    # public_repo omitted → workflow creates the release on the current repo
+    permissions:
+      contents: write
+    uses: Codenzia/plugin-runtime/.github/workflows/plugin-release.yml@v1.6.0
+    # public_repo omitted → the release is created on the current repo
+    # (on a tag push only when the repo is private; a public repo needs the
+    # manual dispatch)
     secrets: inherit
 ```
 

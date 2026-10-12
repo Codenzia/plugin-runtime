@@ -5,6 +5,20 @@ All notable changes to the reusable workflows in this repository.
 Pre-1.0 SemVer, per the fleet dependency policy: **patch = compatible fix,
 minor = breaking or behaviour change**.
 
+## v1.6.0 — 2026-10-13
+
+### Changed
+
+- **`plugin-release.yml`: a tag push never publishes publicly.** Public
+  mirroring and Packagist are owner-click only. On a `push` of a `v*` tag the
+  workflow now skips the `public_repo` mirror push, and creates the GitHub
+  Release only when the caller repo is private and has no mirror; the Satis
+  notify still runs, so the version reaches packages.codenzia.com as before.
+  The mirror push and the release on the public repo run only when the caller
+  is started by `workflow_dispatch` from the tag ref. Runs from a branch ref
+  are refused. Callers that want the manual path add `workflow_dispatch:` to
+  their `on:` block and move the ref to `@v1.6.0`.
+
 ## v1.5.0 — 2026-09-24
 
 ### Changed
